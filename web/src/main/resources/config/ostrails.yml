@@ -1,0 +1,14 @@
+ostrails:
+  evaluatorId: "ostrails"
+  useSharedStorage: ${OSTRAILS_EVALUATOR_USE_SHARED_STORAGE:false}
+  has-logo: ${OSTRAILS_EVALUATOR_HAS_LOGO:true}
+  logo: ${OSTRAILS_EVALUATOR_LOGO_PATH:classpath:ostrails.png}
+  base-url: ${OSTRAILS_EVALUATOR_BASE_URL}
+  configurationFields:
+  userConfigurationFields:
+  useRemoteBenchmarks: ${OSTRAILS_EVALUATOR_USE_REMOTE_BENCHMARKS:true}
+  availableBenchmarks:
+    - id: 684843aa21dfc4211ca0cdcf
+      label: Compliance with DMP Common Standards
+      appliesTo:
+        - Plan
