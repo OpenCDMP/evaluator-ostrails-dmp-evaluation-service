@@ -2,6 +2,7 @@ package org.opencdmp.evaluator.ostrails.service.evaluator;
 
 import org.opencdmp.commonmodels.models.ConfigurationField;
 import org.opencdmp.evaluatorbase.interfaces.BenchmarkConfiguration;
+import org.opencdmp.evaluatorbase.interfaces.TestConfiguration;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 import java.util.List;
@@ -17,6 +18,8 @@ public class EvaluatorOSTrailsServiceProperties {
 	private List<ConfigurationField> userConfigurationFields;
 	private boolean useRemoteBenchmarks;
 	private List<BenchmarkConfiguration> availableBenchmarks;
+	private boolean useRemoteTests;
+	private List<TestConfiguration> availableTests;
 
 	public String getEvaluatorId() {
 		return evaluatorId;
@@ -88,5 +91,21 @@ public class EvaluatorOSTrailsServiceProperties {
 
 	public void setAvailableBenchmarks(List<BenchmarkConfiguration> availableBenchmarks) {
 		this.availableBenchmarks = availableBenchmarks;
+	}
+
+	public boolean isUseRemoteTests() {
+		return useRemoteTests;
+	}
+
+	public void setUseRemoteTests(boolean useRemoteTests) {
+		this.useRemoteTests = useRemoteTests;
+	}
+
+	public List<TestConfiguration> getAvailableTests() {
+		return availableTests;
+	}
+
+	public void setAvailableTests(List<TestConfiguration> availableTests) {
+		this.availableTests = availableTests;
 	}
 }

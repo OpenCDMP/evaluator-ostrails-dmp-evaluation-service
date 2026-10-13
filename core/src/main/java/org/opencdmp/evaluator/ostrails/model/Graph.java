@@ -1,26 +1,17 @@
 package org.opencdmp.evaluator.ostrails.model;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
+@JsonIgnoreProperties
 public class Graph {
 
-    @JsonProperty(value="@id")
-    private String id;
-
-    @JsonProperty(value="@type")
-    private String type;
-
-    @JsonProperty(value="dct:title")
+    @JsonProperty(value="dcterms:title")
     private Label dctTitle;
 
-    @JsonProperty(value="dct:description")
-    private Label dctDescription;
+    @JsonProperty(value="dcterms:identifier")
+    private Identifier identifier;
 
-    @JsonProperty(value="prov:value")
-    private Label value;
-
-    @JsonProperty(value="ftr:log")
-    private Label log;
 
     public static class Label {
 
@@ -47,36 +38,18 @@ public class Graph {
         }
     }
 
-    public String getId() {
-        return id;
-    }
+    public static class Identifier {
 
-    public void setId(String id) {
-        this.id = id;
-    }
+        @JsonProperty(value="@id")
+        private String id;
 
-    public String getType() {
-        return type;
-    }
+        public String getId() {
+            return id;
+        }
 
-    public void setType(String type) {
-        this.type = type;
-    }
-
-    public Label getValue() {
-        return value;
-    }
-
-    public void setValue(Label value) {
-        this.value = value;
-    }
-
-    public Label getLog() {
-        return log;
-    }
-
-    public void setLog(Label log) {
-        this.log = log;
+        public void setId(String id) {
+            this.id = id;
+        }
     }
 
     public Label getDctTitle() {
@@ -87,11 +60,11 @@ public class Graph {
         this.dctTitle = dctTitle;
     }
 
-    public Label getDctDescription() {
-        return dctDescription;
+    public Identifier getIdentifier() {
+        return identifier;
     }
 
-    public void setDctDescription(Label dctDescription) {
-        this.dctDescription = dctDescription;
+    public void setIdentifier(Identifier identifier) {
+        this.identifier = identifier;
     }
 }

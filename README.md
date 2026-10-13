@@ -1,146 +1,155 @@
-# Evaluator OSTrails DMP Evaluation Service for OpenCDMP
+# OpenCDMP OSTrails DMP evaluator
 
-**evaluator-ostrails-dmp-evaluation-service** is an implementation of the [evaluator-base](https://github.com/OpenCDMP/evaluator-base) package that evaluates **RDA JSON exports** of Data Management Plans (DMPs) by delegating to the external **[OSTrails DMP Evaluation Service](https://github.com/OSTrails/DMP-Evaluation-Service)**.
+**evaluator-ostrails-dmp-evaluation-service** evaluates a plan's RDA JSON export with the [OSTrails DMP Evaluation Service](https://github.com/OSTrails/DMP-Evaluation-Service), an open-source engine that runs benchmarks and tests on machine-actionable Data Management Plans (maDMPs). It forwards the export to an OSTrails instance and turns the OSTrails results into OpenCDMP evaluation results.
 
-## Overview
+It is an evaluator plugin for [OpenCDMP](https://github.com/OpenCDMP/OpenCDMP), the open platform for Data Management Plans and other Output Management Plans: a user starts an evaluation from a plan, OpenCDMP calls the evaluator over HTTP, and the result appears in OpenCDMP. The service implements the interfaces of [evaluator-base](https://github.com/OpenCDMP/evaluator-base); its evaluator id is `ostrails`. See [Evaluator services](https://opencdmp.github.io/optional-services/evaluator-services/#evaluator-ostrails) in the OpenCDMP documentation.
 
-This service acts as an OpenCDMP evaluator plugin. When a plan evaluation is requested, it forwards the RDA JSON export to the [OSTrails DMP Evaluation Service](https://ostrails-dmp-evaluation.arisnet.ac.at/swagger-ui/index.html#/) — an open-source evaluation engine available at [github.com/OSTrails/DMP-Evaluation-Service](https://github.com/OSTrails/DMP-Evaluation-Service) — and maps the results back into OpenCDMP's standard rank/result format.
+## What it checks
 
-Evaluation is benchmark-based: each benchmark represents a set of metrics (e.g. schema compliance, FAIRness, RDM coverage). Benchmarks can be fetched dynamically from the remote OSTrails service or configured locally.
+- OpenCDMP sends the plan's RDA JSON export, produced by the [RDA JSON file transformer](https://github.com/OpenCDMP/file-transformer-rda-json). The evaluator reads only that file.
+- The OSTrails service defines the checks. A benchmark is a named group of checks, such as compliance with the RDA DMP Common Standard; a test is one check that users can select on its own. Users can select benchmarks, tests, or both.
+- For each selected benchmark, the evaluator posts the export to `<OSTRAILS_EVALUATOR_BASE_URL>/assess/benchmark`; for each selected test, to `/assess/test`.
+- Each test result that OSTrails returns becomes one result, titled after the benchmark or test it came from, with a pass (`1`) or fail (`0`) and the OSTrails title, description and log as details. A benchmark that returns no test results counts as failed. The plan passes only if every result passes.
+- Only plans can be evaluated. Asset evaluation (`/rank/description`) is not supported.
 
-## Features
+What OSTrails sees depends on what the RDA export contains; see the [RDA JSON semantics reference](https://opencdmp.github.io/optional-services/file-transformers/rda-json-semantics/).
 
-- **Plan Evaluation**: Evaluates RDA JSON exports against configurable benchmarks via the OSTrails service.
-- **Remote Benchmarks**: Fetches available benchmarks directly from the OSTrails API (configurable).
-- **Spring Boot Microservice**: Runs as a standalone Spring Boot service with OAuth2/JWT authentication.
-- **Audit Logging**: All evaluation requests are tracked via the OpenCDMP audit service.
+## Requirements
 
-**Supported operations:**
-- ✅ Evaluate and rank plans (RDA JSON export required)
-- ❌ Evaluate and rank descriptions (not supported)
+- An OpenCDMP installation and its Keycloak realm. The service accepts only tokens that this realm issued with the `plugins` audience.
+- An OSTrails DMP Evaluation Service the evaluator can reach. Run your own from the [OSTrails repository](https://github.com/OSTrails/DMP-Evaluation-Service), or use a public instance such as `https://ostrails-dmp-evaluation.arisnet.ac.at` ([API](https://ostrails-dmp-evaluation.arisnet.ac.at/swagger-ui/index.html)).
+- To build from source: Java 21 and Maven. The service runs on Spring Boot 4.0 and uses `evaluator-base`; the version is in `pom.xml`.
 
----
+## Run with Docker
 
-### API Endpoints
+The image is [`opencdmp/evaluator-ostrails-dmp-evaluation-service`](https://hub.docker.com/r/opencdmp/evaluator-ostrails-dmp-evaluation-service) on Docker Hub. It listens on port `8080`, reads `app-<PROFILE>.env` from `/config` (set the `PROFILE` environment variable), and writes its logs to `/logs`. [Registering plugin services](https://opencdmp.github.io/deployment/configuration/plugin-services/#step-1-run-the-service) shows a Docker Compose entry.
 
-All endpoints are under `/api/evaluator`:
+At startup the service downloads the OpenID configuration from `IDP_ISSUER_URI`, so Keycloak must be reachable at that address. `/actuator/health` reports when the service is up.
 
-| Method | Path | Description |
-|--------|------|-------------|
-| `POST` | `/api/evaluator/rank/plan` | Evaluate a plan against selected benchmarks |
-| `GET` | `/api/evaluator/config` | Get evaluator configuration and available benchmarks |
-| `GET` | `/api/evaluator/logo` | Get evaluator logo (base64) |
-
-### Example
-
-**POST `/api/evaluator/rank/plan`**: Evaluates a plan in RDA JSON format.
+## Build from source
 
 ```bash
-POST /api/evaluator/rank/plan
-{
-  "planModel": {
-    "id": "plan-uuid",
-    "title": "My Research Plan",
-    "rdaJsonFile": {
-      "filename": "plan.json",
-      "file": "<byte array of RDA JSON content>"
-    }
-  },
-  "benchmarkIds": [
-    "684843aa21dfc4211ca0cdcf",
-    "68bfe7e0d66a3009c09e6832",
-    "68bff901d66a3009c09e6834"
-  ]
-}
+mvn clean package
 ```
 
-Response:
+The build produces `web/target/evaluator-ostrails-web-1.0.0-SNAPSHOT.jar`. To run it, set the required variables and start it:
 
-```json
-{
-  "rank": 0.33,
-  "results": [
-    {
-      "rank": 0.0,
-      "benchmarkTitle": "Compliance with DMP Common Standards",
-      "metrics": [
-        {
-          "rank": 1.0,
-          "metricTitle": "Machine-Actionable Format Validation OUTPUT",
-          "metricDetails": "File extension is a valid json."
-        },
-        {
-          "rank": 0.0,
-          "metricTitle": "DMP Structure Validation (JSON Schema) OUTPUT",
-          "metricDetails": "Missing required fields detected: ..."
-        }
-      ]
-    },
-    {
-      "rank": 1.0,
-      "benchmarkTitle": "DMP FAIRness",
-      "metrics": [
-        {
-          "rank": 1.0,
-          "metricTitle": "DMP Identifier Structure Validation OUTPUT",
-          "metricDetails": "dmp_id is valid."
-        }
-      ]
-    }
-  ]
-}
+```bash
+export IDP_ISSUER_URI=https://opencdmp.example.org/auth/realms/OpenCDMP
+export IDP_CLAIMS_ROLES_PATH=plugins.roles
+export SECURITY_AUDIENCE=plugins
+export LOGGING_PATH=./logs
+export OSTRAILS_EVALUATOR_BASE_URL=https://ostrails-dmp-evaluation.arisnet.ac.at
+java -jar web/target/evaluator-ostrails-web-1.0.0-SNAPSHOT.jar
 ```
 
----
+Without `SERVER_PORT`, the service listens on port `8079`; check it with `curl http://localhost:8079/actuator/health`. To call it with a token and try it with a local OpenCDMP installation, see [Run and test a plugin locally](https://opencdmp.github.io/developers/plugins/run-locally/).
+
+The `Dockerfile` builds the service from source:
+
+```bash
+docker build -t evaluator-ostrails-dmp-evaluation-service .
+```
 
 ## Configuration
 
-Configuration is done via environment variables (or `ostrails.yml` overrides):
+The service reads its settings from environment variables. It needs the [settings common to all plugin services](https://opencdmp.github.io/deployment/configuration/plugin-services/#settings-common-to-all-plugin-services): `IDP_ISSUER_URI`, `IDP_CLAIMS_ROLES_PATH` (`plugins.roles`) and `SECURITY_AUDIENCE` (`plugins`) for authentication, `PROFILE`, and the logging settings. Its own settings are:
 
-| Variable | Required | Default | Description |
-|----------|----------|---------|-------------|
-| `OSTRAILS_EVALUATOR_BASE_URL` | **Yes** | — | Base URL of the OSTrails DMP Evaluation Service |
-| `OSTRAILS_EVALUATOR_USE_REMOTE_BENCHMARKS` | No | `true` | Fetch benchmarks from the OSTrails API at startup |
-| `OSTRAILS_EVALUATOR_USE_SHARED_STORAGE` | No | `false` | Use shared storage for file handling |
-| `OSTRAILS_EVALUATOR_HAS_LOGO` | No | `true` | Whether to serve a logo |
-| `OSTRAILS_EVALUATOR_LOGO_PATH` | No | `classpath:ostrails.png` | Path to logo resource |
+| Variable | Purpose | Default |
+| --- | --- | --- |
+| `OSTRAILS_EVALUATOR_BASE_URL` | Base URL of the OSTrails DMP Evaluation Service. Required. | - |
+| `OSTRAILS_EVALUATOR_USE_REMOTE_BENCHMARKS` | Offer the benchmarks that the OSTrails service lists (`/benchmarks/list/jsonLD`). When `false`, offer the `availableBenchmarks` of `ostrails.yml`; the bundled file lists one, `Compliance with DMP Common Standards`. | `true` |
+| `OSTRAILS_EVALUATOR_USE_REMOTE_TESTS` | Offer the tests that the OSTrails service lists (`/tests/list`). When `false`, offer the `availableTests` of `ostrails.yml`; the bundled file lists none. | `true` |
+| `OSTRAILS_EVALUATOR_HAS_LOGO`, `OSTRAILS_EVALUATOR_LOGO_PATH` | Logo shown next to the evaluator in OpenCDMP | `true`, `classpath:ostrails.png` |
+| `OSTRAILS_EVALUATOR_USE_SHARED_STORAGE` | Reported to OpenCDMP, but this evaluator reads no shared folder. Leave it `false`. | `false` |
 
-OAuth2/JWT security and server settings follow the standard OpenCDMP evaluator configuration pattern.
+[Evaluator services configuration](https://opencdmp.github.io/deployment/configuration/backend/evaluators/#evaluator-ostrails) has the full reference.
 
----
+### Register with OpenCDMP
 
-## Integration with OpenCDMP
+Register the service with its address in the API service configuration under `evaluator.sources`, with `evaluatorId: ostrails` and the RDA JSON transformer (`rda-file-transformer`) as `rdaTransformerId`, or for one organisation under **Settings > Plugins**. The API service calls the evaluator with a client-credentials token that carries the `plugins` audience. See [Registering plugin services](https://opencdmp.github.io/deployment/configuration/plugin-services/).
 
-To integrate this service with your OpenCDMP deployment, configure the evaluator plugin in OpenCDMP.
+## API
 
-For detailed integration instructions, see the [OSTrails Evaluator Configuration](https://opencdmp.github.io/getting-started/configuration/backend/evaluators/#evaluator-ostrails) and [OpenCDMP Evaluator Service Authentication](https://opencdmp.github.io/getting-started/configuration/backend/#evaluator-service-authentication).
+| Method | Path | Description |
+| --- | --- | --- |
+| `POST` | `/api/evaluator/rank/plan` | Evaluate a plan against the selected benchmarks and tests |
+| `POST` | `/api/evaluator/rank/description` | Not supported; returns an error |
+| `GET` | `/api/evaluator/config` | Evaluator id, available benchmarks and tests, and how ranks map to pass or fail |
+| `GET` | `/api/evaluator/logo` | Logo as base64, if one is configured |
 
----
+The `/api` endpoints require a bearer token. `/actuator/health`, `/actuator/info`, `/actuator/metrics` and `/actuator/prometheus` are open, so keep the port on an internal network.
 
-## See Also
+Request (`file` is the RDA JSON export, base64-encoded; give at least one of `benchmarkIds` and `testIds`, using the ids that `/api/evaluator/config` lists):
 
-- [OSTrails DMP Evaluation Service](https://github.com/OSTrails/DMP-Evaluation-Service) — the upstream evaluation engine this service wraps
-- [OSTrails DMP Evaluation Service API](https://ostrails-dmp-evaluation.arisnet.ac.at/swagger-ui/index.html#/) — live Swagger UI
-- [evaluator-base](https://github.com/OpenCDMP/evaluator-base) — the OpenCDMP evaluator interface this service implements
-- [Evaluator Services Overview](https://opencdmp.github.io/optional-services/evaluator-services/) — all available OpenCDMP evaluators
-- [User Guide: Evaluating Plans](https://opencdmp.github.io/user-guide/plans/evaluators/)
-- [Developer Guide: Building Custom Evaluator Services](https://opencdmp.github.io/developers/plugins/evaluator/)
+```json
+{
+  "planModel": {
+    "id": "0b7f4a8e-5d3c-4a51-9f2e-6c1d2b3a4e5f",
+    "label": "My research plan",
+    "rdaJsonFile": {
+      "filename": "plan.json",
+      "mimeType": "application/json",
+      "file": "<base64-encoded RDA JSON>"
+    }
+  },
+  "benchmarkIds": ["684843aa21dfc4211ca0cdcf"],
+  "testIds": ["68c00a1bd66a3009c09e6841"]
+}
+```
 
----
+The response is a one-element list with the result for the whole plan. Each OSTrails test result is one entry of `results`, with a single metric:
+
+```json
+[
+  {
+    "rank": 0.0,
+    "results": [
+      {
+        "rank": 1.0,
+        "benchmarkTitle": "Compliance with DMP Common Standards",
+        "metrics": [
+          {
+            "rank": 1.0,
+            "metricTitle": "Machine-Actionable Format Validation OUTPUT",
+            "metricDetails": "File extension is a valid json."
+          }
+        ]
+      },
+      {
+        "rank": 0.0,
+        "benchmarkTitle": "Compliance with DMP Common Standards",
+        "metrics": [
+          {
+            "rank": 0.0,
+            "metricTitle": "DMP Structure Validation (JSON Schema) OUTPUT",
+            "metricDetails": "Missing required fields detected: ..."
+          }
+        ]
+      }
+    ]
+  }
+]
+```
+
+The [evaluator plugin guide](https://opencdmp.github.io/developers/plugins/evaluator/) and [Common models](https://opencdmp.github.io/developers/plugins/common-models/) describe the request and result models.
+
+## Related resources
+
+- [Evaluator services](https://opencdmp.github.io/optional-services/evaluator-services/#evaluator-ostrails): what each OpenCDMP evaluator checks
+- [Evaluating plans](https://opencdmp.github.io/using/plans/evaluators/): running an evaluation and reading the result in OpenCDMP
+- [Evaluator plugin guide](https://opencdmp.github.io/developers/plugins/evaluator/): building your own evaluator
+- [OSTrails DMP Evaluation Service](https://github.com/OSTrails/DMP-Evaluation-Service): the evaluation engine this service calls
+- [OpenCDMP documentation](https://opencdmp.github.io/)
+
+## Contributing
+
+Report bugs and suggest changes in [GitHub Issues](https://github.com/OpenCDMP/evaluator-ostrails-dmp-evaluation-service/issues). See [Contributing](https://opencdmp.github.io/developers/contributing/) for how to propose a change.
 
 ## License
 
-This repository is licensed under the [EUPL 1.2 License](LICENSE).
+evaluator-ostrails-dmp-evaluation-service is licensed under the [European Union Public Licence (EUPL) v1.2](LICENSE).
 
----
+## Contact
 
-### Contact
-
-For questions, support, or feedback:
-
-- **Email**: opencdmp at cite.gr
-- **GitHub Issues**: https://github.com/OpenCDMP/evaluator-ostrails-dmp-evaluation-service/issues
-
----
-
-*This service is part of the OpenCDMP ecosystem. For general OpenCDMP documentation, visit [opencdmp.github.io](https://opencdmp.github.io).*
+Questions: email opencdmp at cite.gr.

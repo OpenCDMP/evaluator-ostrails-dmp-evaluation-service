@@ -5,14 +5,12 @@ import gr.cite.tools.exception.MyApplicationException;
 import gr.cite.tools.logging.LoggerService;
 import gr.cite.tools.logging.MapLogEntry;
 import org.opencdmp.commonmodels.enums.PluginEntityType;
-import org.opencdmp.evaluator.ostrails.model.Benchmark;
 import org.opencdmp.evaluator.ostrails.model.Graph;
+import org.opencdmp.evaluator.ostrails.model.Result;
+import org.opencdmp.evaluator.ostrails.model.Test;
 import org.opencdmp.evaluatorbase.enums.RankType;
 import org.opencdmp.evaluatorbase.enums.SuccessStatus;
-import org.opencdmp.evaluatorbase.interfaces.BenchmarkConfiguration;
-import org.opencdmp.evaluatorbase.interfaces.EvaluatorClient;
-import org.opencdmp.evaluatorbase.interfaces.EvaluatorConfiguration;
-import org.opencdmp.evaluatorbase.interfaces.SelectionConfiguration;
+import org.opencdmp.evaluatorbase.interfaces.*;
 import org.opencdmp.evaluatorbase.models.misc.*;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -21,25 +19,31 @@ import org.springframework.core.io.ByteArrayResource;
 import org.springframework.core.io.Resource;
 import org.springframework.core.io.ResourceLoader;
 import org.springframework.http.MediaType;
+import io.netty.channel.ChannelOption;
 import org.springframework.http.client.MultipartBodyBuilder;
-import org.springframework.http.codec.ClientCodecConfigurer;
+import org.springframework.http.client.reactive.ReactorClientHttpConnector;
 import org.springframework.stereotype.Component;
 import org.springframework.web.context.annotation.RequestScope;
 import org.springframework.web.reactive.function.BodyInserters;
 import org.springframework.web.reactive.function.client.ExchangeFilterFunction;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Mono;
+import reactor.netty.http.client.HttpClient;
+import tools.jackson.core.type.TypeReference;
+import tools.jackson.databind.ObjectMapper;
 
-import javax.management.InvalidApplicationException;
 import java.io.*;
+import java.time.Duration;
 import java.util.*;
-import java.util.stream.Collectors;
 
 @Component
 @RequestScope
 public class EvaluatorService implements EvaluatorClient {
 
     private static final LoggerService logger = new LoggerService(LoggerFactory.getLogger(EvaluatorService.class));
+    private static final int CONNECT_TIMEOUT_MILLIS = 10_000;
+    private static final Duration RESPONSE_TIMEOUT = Duration.ofMinutes(5);
+    private static final int MAX_IN_MEMORY_SIZE = 16 * 1024 * 1024;
     private final EvaluatorOSTrailsServiceProperties evaluatorOstrailsServiceProperties;
     private final ResourceLoader resourceLoader;
 
@@ -53,91 +57,147 @@ public class EvaluatorService implements EvaluatorClient {
 
 
     @Override
-    public RankResultModel rankPlan(PlanEvaluationModel planEvaluationModel) {
+    public List<RankResultModel> rankPlan(PlanEvaluationModel planEvaluationModel) {
         if (planEvaluationModel == null || planEvaluationModel.getPlanModel() == null || planEvaluationModel.getPlanModel().getRdaJsonFile() == null ||  planEvaluationModel.getPlanModel().getRdaJsonFile().getFile() == null) throw new MyApplicationException("rda file not found!");
 
-        if (planEvaluationModel.getBenchmarkIds() == null || planEvaluationModel.getBenchmarkIds().isEmpty()) throw new MyApplicationException("benchmark ids are empty!");
-
-        List<BenchmarkConfiguration> availableBenchmarks = this.getAvailableBenchmarks();
+        if ((planEvaluationModel.getBenchmarkIds() == null || planEvaluationModel.getBenchmarkIds().isEmpty()) && (planEvaluationModel.getTestIds() == null || planEvaluationModel.getTestIds().isEmpty())) throw new MyApplicationException("benchmark and tests ids are empty!");
 
         RankResultModel rankModel = new RankResultModel();
         rankModel.setRank(1);
 
         List<EvaluationResultModel> results = new ArrayList<>();
-        for (String benchmarkId: planEvaluationModel.getBenchmarkIds()) {
 
-            BenchmarkConfiguration benchmarkConfiguration = availableBenchmarks.stream().filter(x -> x.getId().equals(benchmarkId)).findFirst().orElse(null);
+        if (planEvaluationModel.getBenchmarkIds() != null && !planEvaluationModel.getBenchmarkIds().isEmpty()) {
+            List<BenchmarkConfiguration> availableBenchmarks = Objects.requireNonNullElse(this.getAvailableBenchmarks(), List.of());
+            for (String benchmarkId : planEvaluationModel.getBenchmarkIds()) {
 
-            if (benchmarkConfiguration == null) throw new MyApplicationException("not found benchmark config with id " + benchmarkId);
+                BenchmarkConfiguration benchmarkConfiguration = availableBenchmarks.stream().filter(x -> x.getId().equals(benchmarkId)).findFirst().orElse(null);
 
-            if (!benchmarkConfiguration.getAppliesTo().contains(PluginEntityType.Plan)) throw new MyApplicationException("benchmark don't apply to plan");
+                if (benchmarkConfiguration == null)
+                    throw new MyApplicationException("not found benchmark config with id " + benchmarkId);
 
-            ByteArrayResource resource = new ByteArrayResource(planEvaluationModel.getPlanModel().getRdaJsonFile().getFile()) {
-                @Override
-                public String getFilename() {
-                    return planEvaluationModel.getPlanModel().getRdaJsonFile().getFilename();
-                }
-            };
+                if (!benchmarkConfiguration.getAppliesTo().contains(PluginEntityType.Plan))
+                    throw new MyApplicationException("benchmark don't apply to plan");
 
-            MultipartBodyBuilder builder = new MultipartBodyBuilder();
-            builder.part("maDMP", resource).contentType(MediaType.APPLICATION_JSON);
-            builder.part("benchmark", benchmarkId);
-            builder.part("reportId", "");
+                ByteArrayResource resource = new ByteArrayResource(planEvaluationModel.getPlanModel().getRdaJsonFile().getFile()) {
+                    @Override
+                    public String getFilename() {
+                        return planEvaluationModel.getPlanModel().getRdaJsonFile().getFilename();
+                    }
+                };
 
-            List<Benchmark> response = this.getWebClient().post()
-                    .uri(this.evaluatorOstrailsServiceProperties.getBaseUrl() + "/assess/benchmark/json-ld")
-                    .contentType(MediaType.MULTIPART_FORM_DATA)
-                    .accept(MediaType.ALL)
-                    .body(BodyInserters.fromMultipartData(builder.build()))
-                    .retrieve()
-                    .bodyToMono(new ParameterizedTypeReference<List<Benchmark>>() {})
-                    .block();
 
-            if (response == null) throw new MyApplicationException("response not found for benchmark with id " + benchmarkId);
+                MultipartBodyBuilder builder = new MultipartBodyBuilder();
+                builder.part("maDMP", resource).contentType(MediaType.APPLICATION_JSON);
+                builder.part("benchmark", benchmarkId);
+                builder.part("reportId", "");
 
-            EvaluationResultModel evaluationResultModel = new EvaluationResultModel();
-            evaluationResultModel.setBenchmarkTitle(benchmarkConfiguration.getLabel());
-            evaluationResultModel.setRank(1);
+                List<Result> benchmarkResults = this.getWebClient().post()
+                        .uri(this.evaluatorOstrailsServiceProperties.getBaseUrl() + "/assess/benchmark")
+                        .contentType(MediaType.MULTIPART_FORM_DATA)
+                        .accept(MediaType.ALL)
+                        .body(BodyInserters.fromMultipartData(builder.build()))
+                        .retrieve()
+                        .bodyToMono(new ParameterizedTypeReference<List<Result>>() {})
+                        .block();
 
-            List<EvaluationResultMetricModel> metrics = new ArrayList<>();
-            for (Benchmark benchmark: response) {
-
-                Graph graph = benchmark.getGraph().stream().filter(x -> x.getType().equalsIgnoreCase("ftr:TestResult")).findFirst().orElse(null);
-
-                if (graph == null) throw new MyApplicationException("not found benchmark result with id " + benchmarkId);
-
-                EvaluationResultMetricModel metric = new EvaluationResultMetricModel();
-
-                if (graph.getValue() != null && graph.getValue().getValue() != null && graph.getValue().getValue().equalsIgnoreCase("pass")) {
-                    // evaluation result for specific metric
-                    metric.setRank(1);
+                if (benchmarkResults != null && !benchmarkResults.isEmpty()) {
+                    for (Result result: benchmarkResults) {
+                        this.buildEvaluationResultModel(benchmarkConfiguration.getLabel(), result, rankModel, results);
+                    }
                 } else {
-                    // entire evaluation result failed
-                    evaluationResultModel.setRank(0);
-                    rankModel.setRank(0);
-
-                    // evaluation result failed for specific metric
-                    metric.setRank(0);
+                    // a benchmark that ran no tests must not count as a pass
+                    this.buildEvaluationResultModel(benchmarkConfiguration.getLabel(), null, rankModel, results);
                 }
 
-                if (graph.getDctTitle() != null) metric.setMetricTitle(graph.getDctTitle().getValue());
-                if (graph.getDctDescription() != null) metric.setMetricDetails(graph.getDctDescription().getValue());
-                if (graph.getLog() != null) metric.setMetricDetails(graph.getLog().getValue());
-
-                metrics.add(metric);
             }
-
-            if (!metrics.isEmpty()) evaluationResultModel.setMetrics(metrics);
-            results.add(evaluationResultModel);
         }
+
+        if (planEvaluationModel.getTestIds() != null && !planEvaluationModel.getTestIds().isEmpty()) {
+            List<TestConfiguration> availableTests = Objects.requireNonNullElse(this.getAvailableTests(), List.of());
+            for (String testId: planEvaluationModel.getTestIds()) {
+
+                TestConfiguration testConfiguration = availableTests.stream().filter(x -> x.getId().equals(testId)).findFirst().orElse(null);
+
+                if (testConfiguration == null)
+                    throw new MyApplicationException("not found test config with id " + testId);
+
+                if (!testConfiguration.getAppliesTo().contains(PluginEntityType.Plan))
+                    throw new MyApplicationException("test don't apply to plan");
+
+                ByteArrayResource resource = new ByteArrayResource(planEvaluationModel.getPlanModel().getRdaJsonFile().getFile()) {
+                    @Override
+                    public String getFilename() {
+                        return planEvaluationModel.getPlanModel().getRdaJsonFile().getFilename();
+                    }
+                };
+
+                MultipartBodyBuilder builder = new MultipartBodyBuilder();
+                builder.part("maDMP", resource).contentType(MediaType.APPLICATION_JSON);
+                builder.part("test", testId);
+                builder.part("reportId", "");
+
+                Result result = this.getWebClient().post()
+                        .uri(this.evaluatorOstrailsServiceProperties.getBaseUrl() + "/assess/test")
+                        .contentType(MediaType.MULTIPART_FORM_DATA)
+                        .accept(MediaType.ALL)
+                        .body(BodyInserters.fromMultipartData(builder.build()))
+                        .retrieve()
+                        .bodyToMono(new ParameterizedTypeReference<Result>() {
+                        })
+                        .block();
+
+
+                this.buildEvaluationResultModel(testConfiguration.getLabel(), result, rankModel, results);
+
+            }
+        }
+
 
         if (!results.isEmpty()) rankModel.setResults(results);
 
-        return rankModel;
+        return List.of(rankModel);
+    }
+
+    private void buildEvaluationResultModel(String evaluationResultModelLabel, Result result, RankResultModel rankModel, List<EvaluationResultModel> results) {
+        EvaluationResultModel evaluationResultModel = new EvaluationResultModel();
+        evaluationResultModel.setBenchmarkTitle(evaluationResultModelLabel);
+        evaluationResultModel.setRank(1);
+
+        List<EvaluationResultMetricModel> metrics = new ArrayList<>();
+
+        EvaluationResultMetricModel metric = new EvaluationResultMetricModel();
+
+        if (result != null && result.getValue() != null && result.getValue().equalsIgnoreCase("pass")) {
+            // evaluation result for specific metric
+            metric.setRank(1);
+        } else {
+            // entire evaluation result failed
+            evaluationResultModel.setRank(0);
+            rankModel.setRank(0);
+
+            // evaluation result failed for specific metric
+            metric.setRank(0);
+        }
+
+        if (result == null) {
+            metric.setMetricDetails("No results returned");
+        } else {
+            if (result.getTitle() != null) metric.setMetricTitle(result.getTitle());
+            List<String> details = new ArrayList<>();
+            if (result.getDescription() != null && !result.getDescription().isBlank()) details.add(result.getDescription());
+            if (result.getLog() != null && !result.getLog().isBlank()) details.add(result.getLog());
+            if (!details.isEmpty()) metric.setMetricDetails(String.join("\n", details));
+        }
+
+        metrics.add(metric);
+
+        evaluationResultModel.setMetrics(metrics);
+        results.add(evaluationResultModel);
     }
 
     @Override
-    public RankResultModel rankDescription(DescriptionEvaluationModel descriptionEvaluationModel) {
+    public List<RankResultModel> rankDescription(DescriptionEvaluationModel descriptionEvaluationModel) {
         throw new UnsupportedOperationException("rank description not supported");
     }
 
@@ -163,40 +223,72 @@ public class EvaluatorService implements EvaluatorClient {
         evaluatorConfiguration.getRankConfig().getSelectionConfiguration().setValueSetList(Arrays.asList(valueSetSuccess, valueSetFail));
 
         evaluatorConfiguration.setAvailableBenchmarks(this.getAvailableBenchmarks());
+        evaluatorConfiguration.setAvailableTests(this.getAvailableTests());
         return evaluatorConfiguration;
     }
 
     private List<BenchmarkConfiguration> getAvailableBenchmarks() {
         if (this.evaluatorOstrailsServiceProperties.isUseRemoteBenchmarks()) {
-            List<Map<String, Object>> response = this.getWebClient().get()
-                    .uri(this.evaluatorOstrailsServiceProperties.getBaseUrl() + "/benchmarks/list")
-                    .accept(MediaType.ALL)
-                    .retrieve()
-                    .bodyToMono(new ParameterizedTypeReference<List<Map<String, Object>>>() {})
-                    .block();
-
-            if (response == null) throw new MyApplicationException("benchmarks not found");
-
             List<BenchmarkConfiguration> benchmarkConfigurations = new ArrayList<>();
 
-            for (Map<String, Object> map: response) {
+            List<Graph> benchmarksList = this.getWebClient().get()
+                    .uri(this.evaluatorOstrailsServiceProperties.getBaseUrl() + "/benchmarks/list/jsonLD")
+                    .accept(MediaType.APPLICATION_JSON)
+                    .retrieve()
+                    .bodyToMono(new ParameterizedTypeReference<List<Graph>>() {})
+                    .block();
+
+            if (benchmarksList == null) benchmarksList = new ArrayList<>();
+
+            for (Graph graph: benchmarksList) {
 
                 BenchmarkConfiguration benchmarkConfiguration = new BenchmarkConfiguration();
-
-                Object benchmarkId = map.getOrDefault("benchmarkId", null);
-                benchmarkConfiguration.setId((String) benchmarkId);
-
-                Object title = map.getOrDefault("title", null);
-                benchmarkConfiguration.setLabel((String) title);
-
+                benchmarkConfiguration.setId(graph.getIdentifier().getId().substring(graph.getIdentifier().getId().lastIndexOf('/') + 1));
+                benchmarkConfiguration.setLabel(graph.getDctTitle().getValue());
                 benchmarkConfiguration.setAppliesTo(List.of(PluginEntityType.Plan));
-
                 benchmarkConfigurations.add(benchmarkConfiguration);
+
             }
+
             return benchmarkConfigurations;
 
         } else {
             return this.evaluatorOstrailsServiceProperties.getAvailableBenchmarks();
+        }
+    }
+
+    private List<TestConfiguration> getAvailableTests() {
+        if (this.evaluatorOstrailsServiceProperties.isUseRemoteTests()) {
+            List<TestConfiguration> testConfigurations = new ArrayList<>();
+
+            Object object = this.getWebClient().get()
+                    .uri(this.evaluatorOstrailsServiceProperties.getBaseUrl() + "/tests/list")
+                    .accept(MediaType.ALL)
+                    .retrieve()
+                    .bodyToMono(new ParameterizedTypeReference<Object>() {})
+                    .block();
+
+            if (object instanceof List) {
+                ObjectMapper mapper = new ObjectMapper();
+
+                List<Test> testList = mapper.convertValue(object, new TypeReference<List<Test>>() {}
+                );
+
+                if (testList == null) testList = new ArrayList<>();
+
+                for (Test test: testList) {
+                    TestConfiguration testConfiguration = new TestConfiguration();
+                    testConfiguration.setId(test.getIdentifier());
+                    testConfiguration.setLabel(test.getTitle());
+                    testConfiguration.setAppliesTo(List.of(PluginEntityType.Plan));
+                    testConfigurations.add(testConfiguration);
+                }
+            }
+
+            return testConfigurations;
+
+        } else {
+            return this.evaluatorOstrailsServiceProperties.getAvailableTests();
         }
     }
 
@@ -224,7 +316,10 @@ public class EvaluatorService implements EvaluatorClient {
         return WebClient.builder().filters(exchangeFilterFunctions -> {
             exchangeFilterFunctions.add(logRequest());
             exchangeFilterFunctions.add(logResponse());
-        }).codecs(ClientCodecConfigurer::defaultCodecs
+        }).clientConnector(new ReactorClientHttpConnector(HttpClient.create()
+                .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, CONNECT_TIMEOUT_MILLIS)
+                .responseTimeout(RESPONSE_TIMEOUT))
+        ).codecs(codecs -> codecs.defaultCodecs().maxInMemorySize(MAX_IN_MEMORY_SIZE)
         ).build();
     }
 

@@ -12,3 +12,4 @@ ostrails:
       label: Compliance with DMP Common Standards
       appliesTo:
         - Plan
+  useRemoteTests: ${OSTRAILS_EVALUATOR_USE_REMOTE_TESTS:true}
