@@ -7,7 +7,6 @@ import gr.cite.tools.logging.MapLogEntry;
 import org.opencdmp.commonmodels.enums.PluginEntityType;
 import org.opencdmp.evaluator.ostrails.model.Graph;
 import org.opencdmp.evaluator.ostrails.model.Result;
-import org.opencdmp.evaluator.ostrails.model.Test;
 import org.opencdmp.evaluatorbase.enums.RankType;
 import org.opencdmp.evaluatorbase.enums.SuccessStatus;
 import org.opencdmp.evaluatorbase.interfaces.*;
@@ -241,7 +240,7 @@ public class EvaluatorService implements EvaluatorClient {
             if (benchmarksList == null) benchmarksList = new ArrayList<>();
 
             for (Graph graph: benchmarksList) {
-
+                if (graph == null || graph.getIdentifier() == null || graph.getIdentifier().getId() == null || graph.getIdentifier().getId().isBlank()) continue;
                 BenchmarkConfiguration benchmarkConfiguration = new BenchmarkConfiguration();
                 benchmarkConfiguration.setId(graph.getIdentifier().getId().substring(graph.getIdentifier().getId().lastIndexOf('/') + 1));
                 benchmarkConfiguration.setLabel(graph.getDctTitle().getValue());
@@ -261,28 +260,23 @@ public class EvaluatorService implements EvaluatorClient {
         if (this.evaluatorOstrailsServiceProperties.isUseRemoteTests()) {
             List<TestConfiguration> testConfigurations = new ArrayList<>();
 
-            Object object = this.getWebClient().get()
+            List<Graph> testList = this.getWebClient().get()
                     .uri(this.evaluatorOstrailsServiceProperties.getBaseUrl() + "/tests/list")
                     .accept(MediaType.ALL)
                     .retrieve()
-                    .bodyToMono(new ParameterizedTypeReference<Object>() {})
+                    .bodyToMono(new ParameterizedTypeReference<List<Graph>>() {})
                     .block();
 
-            if (object instanceof List) {
-                ObjectMapper mapper = new ObjectMapper();
+            if (testList == null) testList = new ArrayList<>();
 
-                List<Test> testList = mapper.convertValue(object, new TypeReference<List<Test>>() {}
-                );
+            for (Graph graph: testList) {
+                if (graph == null || graph.getIdentifier() == null || graph.getIdentifier().getId() == null || graph.getIdentifier().getId().isBlank()) continue;
+                TestConfiguration testConfiguration = new TestConfiguration();
+                testConfiguration.setId(graph.getIdentifier().getId());
+                testConfiguration.setLabel(graph.getDctTitle().getValue());
+                testConfiguration.setAppliesTo(List.of(PluginEntityType.Plan));
+                testConfigurations.add(testConfiguration);
 
-                if (testList == null) testList = new ArrayList<>();
-
-                for (Test test: testList) {
-                    TestConfiguration testConfiguration = new TestConfiguration();
-                    testConfiguration.setId(test.getIdentifier());
-                    testConfiguration.setLabel(test.getTitle());
-                    testConfiguration.setAppliesTo(List.of(PluginEntityType.Plan));
-                    testConfigurations.add(testConfiguration);
-                }
             }
 
             return testConfigurations;
