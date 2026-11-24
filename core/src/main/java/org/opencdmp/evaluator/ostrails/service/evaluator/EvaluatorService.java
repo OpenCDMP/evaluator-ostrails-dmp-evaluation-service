@@ -261,7 +261,7 @@ public class EvaluatorService implements EvaluatorClient {
             List<TestConfiguration> testConfigurations = new ArrayList<>();
 
             List<Graph> testList = this.getWebClient().get()
-                    .uri(this.evaluatorOstrailsServiceProperties.getBaseUrl() + "/tests/list")
+                    .uri(this.evaluatorOstrailsServiceProperties.getBaseUrl() + "/tests/list/jsonLD")
                     .accept(MediaType.ALL)
                     .retrieve()
                     .bodyToMono(new ParameterizedTypeReference<List<Graph>>() {})
